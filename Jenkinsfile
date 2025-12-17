@@ -37,10 +37,7 @@ EOF
 
         stage('Ensure DB Running') {
             steps {
-                sh '''
-                # Start the DB only once, ignore if already running
-                docker-compose up -d db || true
-                '''
+                sh 'docker-compose up -d db || true'
             }
         }
 
@@ -62,7 +59,7 @@ EOF
             steps {
                 sh '''
                 NEXT=$(cat next_env)
-                docker-compose -p ${COMPOSE_PROJECT_NAME}_$NEXT build backend
+                docker-compose -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT build backend
                 '''
             }
         }
@@ -71,7 +68,7 @@ EOF
             steps {
                 sh '''
                 NEXT=$(cat next_env)
-                docker-compose -p ${COMPOSE_PROJECT_NAME}_$NEXT up -d backend
+                docker-compose -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT up -d backend
                 '''
             }
         }
@@ -91,7 +88,7 @@ EOF
             steps {
                 sh '''
                 CURRENT=$(cat current_env)
-                docker-compose -p ${COMPOSE_PROJECT_NAME}_$CURRENT down backend || true
+                docker-compose -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$CURRENT down backend || true
                 '''
             }
         }
