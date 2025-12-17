@@ -35,6 +35,15 @@ EOF
             }
         }
 
+        stage('Ensure DB Running') {
+            steps {
+                sh '''
+                # Start the DB only once, ignore if already running
+                docker-compose up -d db || true
+                '''
+            }
+        }
+
         stage('Detect Active Environment') {
             steps {
                 sh '''
@@ -72,7 +81,6 @@ EOF
                 sh '''
                 NEXT=$(cat next_env)
                 sleep 5
-                # optional: check backend health endpoint
                 curl -f http://localhost:${APP_PORT}/health || exit 1
                 docker ps | grep ${COMPOSE_PROJECT_NAME}_$NEXT
                 '''
