@@ -10,9 +10,7 @@ pipeline {
 
     stages {
         stage('Checkout Code') {
-            steps {
-                git branch: "${GIT_BRANCH}", url: "${GIT_REPO}"
-            }
+            steps { git branch: "${GIT_BRANCH}", url: "${GIT_REPO}" }
         }
 
         stage('Create .env') {
@@ -26,9 +24,9 @@ DB_PASS=postgres
 DB_HOST=db
 DB_DIALECT=postgres
 DB_PORT=5432
-JWT_SECRET=6c1f9f0f7493d9cba76b7d8fc08b4f13227c4c19d2c71486d42a47c6b83c9d937c9a2dba9ea1d74fa85bb39b6e2a3d1beaf331b8589c9d3bc0c5c447e8e08de7
-RAZORPAY_KEY_ID=rzp_test_RB6geQZM7LSjyd
-RAZORPAY_KEY_SECRET=1PwTJ0gYwaCINkHHyC1AocQ5
+JWT_SECRET=your_jwt_secret_here
+RAZORPAY_KEY_ID=your_key_id
+RAZORPAY_KEY_SECRET=your_key_secret
 NODE_ENV=production
 EOF
                 '''
@@ -38,11 +36,10 @@ EOF
         stage('Ensure DB Running') {
             steps {
                 sh '''
-                # Remove conflicting DB container if exists
+                # Remove old DB container if exists
                 if [ "$(docker ps -a -q -f name=postgres_db)" ]; then
                     docker rm -f postgres_db
                 fi
-                # Start DB
                 docker-compose -f docker-compose.yml up -d db
                 '''
             }
@@ -66,8 +63,7 @@ EOF
             steps {
                 sh '''
                 NEXT=$(cat next_env)
-                # Use both Compose files so backend sees the DB
-                docker-compose -f docker-compose.yml -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT build backend
+                docker-compose -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT build backend
                 '''
             }
         }
@@ -76,7 +72,7 @@ EOF
             steps {
                 sh '''
                 NEXT=$(cat next_env)
-                docker-compose -f docker-compose.yml -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT up -d backend
+                docker-compose -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT up -d backend
                 '''
             }
         }
@@ -96,18 +92,14 @@ EOF
             steps {
                 sh '''
                 CURRENT=$(cat current_env)
-                docker-compose -f docker-compose.yml -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$CURRENT down backend || true
+                docker-compose -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$CURRENT down backend || true
                 '''
             }
         }
     }
 
     post {
-        success {
-            echo '✅ LMS Backend deployed successfully (Zero-downtime)'
-        }
-        failure {
-            echo '❌ Deployment failed — old version still running'
-        }
+        success { echo '✅ LMS Backend deployed successfully (Zero-downtime)' }
+        failure { echo '❌ Deployment failed — old version still running' }
     }
 }
