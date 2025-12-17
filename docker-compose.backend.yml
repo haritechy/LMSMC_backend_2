@@ -8,6 +8,4 @@ services:
       - "${PORT}:${PORT}"
     env_file:
       - .env
-    depends_on:
-      - db
     restart: unless-stopped

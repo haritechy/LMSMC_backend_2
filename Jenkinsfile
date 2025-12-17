@@ -10,7 +10,9 @@ pipeline {
 
     stages {
         stage('Checkout Code') {
-            steps { git branch: "${GIT_BRANCH}", url: "${GIT_REPO}" }
+            steps {
+                git branch: "${GIT_BRANCH}", url: "${GIT_REPO}"
+            }
         }
 
         stage('Create .env') {
@@ -40,6 +42,7 @@ EOF
                 if [ "$(docker ps -a -q -f name=postgres_db)" ]; then
                     docker rm -f postgres_db
                 fi
+                # Start DB using main compose file
                 docker-compose -f docker-compose.yml up -d db
                 '''
             }
@@ -63,7 +66,8 @@ EOF
             steps {
                 sh '''
                 NEXT=$(cat next_env)
-                docker-compose -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT build backend
+                # Use both Compose files: DB + backend
+                docker-compose -f docker-compose.yml -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT build backend
                 '''
             }
         }
@@ -72,7 +76,7 @@ EOF
             steps {
                 sh '''
                 NEXT=$(cat next_env)
-                docker-compose -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT up -d backend
+                docker-compose -f docker-compose.yml -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT up -d backend
                 '''
             }
         }
@@ -92,7 +96,7 @@ EOF
             steps {
                 sh '''
                 CURRENT=$(cat current_env)
-                docker-compose -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$CURRENT down backend || true
+                docker-compose -f docker-compose.yml -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$CURRENT down backend || true
                 '''
             }
         }
