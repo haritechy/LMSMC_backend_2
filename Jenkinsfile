@@ -50,20 +50,20 @@ EOF
             }
         }
 
-        stage('Build New Version') {
+        stage('Build New Backend') {
             steps {
                 sh '''
                 NEXT=$(cat next_env)
-                docker-compose -p ${COMPOSE_PROJECT_NAME}_$NEXT build
+                docker-compose -p ${COMPOSE_PROJECT_NAME}_$NEXT build backend
                 '''
             }
         }
 
-        stage('Start New Version') {
+        stage('Start New Backend') {
             steps {
                 sh '''
                 NEXT=$(cat next_env)
-                docker-compose -p ${COMPOSE_PROJECT_NAME}_$NEXT up -d
+                docker-compose -p ${COMPOSE_PROJECT_NAME}_$NEXT up -d backend
                 '''
             }
         }
@@ -71,17 +71,19 @@ EOF
         stage('Health Check') {
             steps {
                 sh '''
+                NEXT=$(cat next_env)
+                # optional: check backend health endpoint
                 sleep 10
-                docker ps
+                docker ps | grep ${COMPOSE_PROJECT_NAME}_$NEXT
                 '''
             }
         }
 
-        stage('Stop Old Version') {
+        stage('Stop Old Backend') {
             steps {
                 sh '''
                 CURRENT=$(cat current_env)
-                docker-compose -p ${COMPOSE_PROJECT_NAME}_$CURRENT down || true
+                docker-compose -p ${COMPOSE_PROJECT_NAME}_$CURRENT down backend || true
                 '''
             }
         }
