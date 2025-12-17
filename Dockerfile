@@ -3,10 +3,11 @@ FROM node:18
 WORKDIR /usr/src/app
 
 COPY package*.json ./
-RUN npm install --production  # <-- only install production deps
+
+RUN npm install --production
 
 COPY . .
 
 EXPOSE 9000
 
-CMD ["npm", "start"]  # <-- use start, not dev
+CMD ["node", "server.js"]
