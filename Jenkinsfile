@@ -15,33 +15,14 @@ pipeline {
             }
         }
 
-        stage('Detect Active Environment') {
+        stage('Deploy Blue on 9001') {
             steps {
                 sh '''
-                if docker ps --format '{{.Names}}' | grep -q ${COMPOSE_PROJECT_NAME}_blue_backend; then
-                    echo blue > current_env
-                    echo green > next_env
-                else
-                    echo green > current_env
-                    echo blue > next_env
-                fi
-                '''
-            }
-        }
-
-        stage('Set Dynamic Port & Create .env') {
-            steps {
-                sh '''
-                NEXT=$(cat next_env)
-
-                if [ "$NEXT" = "blue" ]; then
-                    PORT=9001
-                else
-                    PORT=9000
-                fi
+                echo blue > next_env
+                echo green > current_env
 
                 cat <<EOF > .env
-PORT=${PORT}
+PORT=9001
 DB_NAME=lmsmcdb
 DB_USER=postgres
 DB_PASS=postgres
@@ -54,52 +35,18 @@ RAZORPAY_KEY_SECRET=your_key_secret
 NODE_ENV=production
 EOF
 
-                echo "Deploying $NEXT environment on port $PORT"
-                '''
-            }
-        }
-
-        stage('Ensure DB Running') {
-            steps {
-                sh '''
-                if [ "$(docker ps -a -q -f name=postgres_db)" ]; then
-                    docker rm -f postgres_db
-                fi
-
                 docker-compose -f docker-compose.yml up -d db
-                '''
-            }
-        }
-
-        stage('Build New Backend') {
-            steps {
-                sh '''
-                NEXT=$(cat next_env)
 
                 docker-compose \
                   -f docker-compose.yml \
                   -f docker-compose.backend.yml \
-                  -p ${COMPOSE_PROJECT_NAME}_$NEXT \
+                  -p ${COMPOSE_PROJECT_NAME}_blue \
                   build backend
-                '''
-            }
-        }
-
-        stage('Start New Backend') {
-            steps {
-                sh '''
-                NEXT=$(cat next_env)
 
                 docker-compose \
                   -f docker-compose.yml \
                   -f docker-compose.backend.yml \
-                  -p ${COMPOSE_PROJECT_NAME}_$NEXT \
-                  rm -fs backend || true
-
-                docker-compose \
-                  -f docker-compose.yml \
-                  -f docker-compose.backend.yml \
-                  -p ${COMPOSE_PROJECT_NAME}_$NEXT \
+                  -p ${COMPOSE_PROJECT_NAME}_blue \
                   up -d backend
                 '''
             }
@@ -108,13 +55,40 @@ EOF
         stage('Stop Old Backend') {
             steps {
                 sh '''
-                CURRENT=$(cat current_env)
+                docker rm -f xpress_backend || true
+                docker rm -f ${COMPOSE_PROJECT_NAME}_green_backend || true
+                '''
+            }
+        }
+
+        stage('Re-map Blue to 9000 (Production)') {
+            steps {
+                sh '''
+                docker-compose \
+                  -f docker-compose.yml \
+                  -f docker-compose.backend.yml \
+                  -p ${COMPOSE_PROJECT_NAME}_blue \
+                  down
+
+                cat <<EOF > .env
+PORT=9000
+DB_NAME=lmsmcdb
+DB_USER=postgres
+DB_PASS=postgres
+DB_HOST=db
+DB_DIALECT=postgres
+DB_PORT=5432
+JWT_SECRET=your_jwt_secret_here
+RAZORPAY_KEY_ID=your_key_id
+RAZORPAY_KEY_SECRET=your_key_secret
+NODE_ENV=production
+EOF
 
                 docker-compose \
                   -f docker-compose.yml \
                   -f docker-compose.backend.yml \
-                  -p ${COMPOSE_PROJECT_NAME}_$CURRENT \
-                  down || true
+                  -p ${COMPOSE_PROJECT_NAME}_blue \
+                  up -d backend
                 '''
             }
         }
@@ -122,7 +96,7 @@ EOF
 
     post {
         success {
-            echo '✅ LMS Backend deployed successfully (Health check skipped)'
+            echo '✅ Blue deployed and mapped to port 9000 (Zero-downtime)'
         }
         failure {
             echo '❌ Deployment failed'
