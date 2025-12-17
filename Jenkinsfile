@@ -5,46 +5,12 @@ pipeline {
         COMPOSE_PROJECT_NAME = "lms_backend"
         GIT_REPO = "https://github.com/haritechy/LMSMC_backend_2.git"
         GIT_BRANCH = "lmsproduction"
-        APP_PORT = "9000"
     }
 
     stages {
         stage('Checkout Code') {
             steps {
                 git branch: "${GIT_BRANCH}", url: "${GIT_REPO}"
-            }
-        }
-
-        stage('Create .env') {
-            steps {
-                sh '''
-                cat <<EOF > .env
-PORT=${APP_PORT}
-DB_NAME=lmsmcdb
-DB_USER=postgres
-DB_PASS=postgres
-DB_HOST=db
-DB_DIALECT=postgres
-DB_PORT=5432
-JWT_SECRET=your_jwt_secret_here
-RAZORPAY_KEY_ID=your_key_id
-RAZORPAY_KEY_SECRET=your_key_secret
-NODE_ENV=production
-EOF
-                '''
-            }
-        }
-
-        stage('Ensure DB Running') {
-            steps {
-                sh '''
-                # Remove old DB container if exists
-                if [ "$(docker ps -a -q -f name=postgres_db)" ]; then
-                    docker rm -f postgres_db
-                fi
-                # Start DB using main compose file
-                docker-compose -f docker-compose.yml up -d db
-                '''
             }
         }
 
@@ -62,11 +28,53 @@ EOF
             }
         }
 
+        stage('Set Dynamic Port & Create .env') {
+            steps {
+                sh '''
+                NEXT=$(cat next_env)
+                # Assign port dynamically
+                if [ "$NEXT" = "blue" ]; then
+                    PORT=9001
+                else
+                    PORT=9000
+                fi
+
+                cat <<EOF > .env
+PORT=${PORT}
+DB_NAME=lmsmcdb
+DB_USER=postgres
+DB_PASS=postgres
+DB_HOST=db
+DB_DIALECT=postgres
+DB_PORT=5432
+JWT_SECRET=your_jwt_secret_here
+RAZORPAY_KEY_ID=your_key_id
+RAZORPAY_KEY_SECRET=your_key_secret
+NODE_ENV=production
+EOF
+
+                echo "Deploying $NEXT environment on port $PORT"
+                '''
+            }
+        }
+
+        stage('Ensure DB Running') {
+            steps {
+                sh '''
+                # Remove old DB container if exists
+                if [ "$(docker ps -a -q -f name=postgres_db)" ]; then
+                    docker rm -f postgres_db
+                fi
+                # Start DB
+                docker-compose -f docker-compose.yml up -d db
+                '''
+            }
+        }
+
         stage('Build New Backend') {
             steps {
                 sh '''
                 NEXT=$(cat next_env)
-                # Use both Compose files: DB + backend
                 docker-compose -f docker-compose.yml -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT build backend
                 '''
             }
@@ -85,8 +93,10 @@ EOF
             steps {
                 sh '''
                 NEXT=$(cat next_env)
+                PORT=$(grep ^PORT .env | cut -d '=' -f2)
                 sleep 5
-                curl -f http://localhost:${APP_PORT}/health || exit 1
+                echo "Checking health on port $PORT"
+                curl -f http://localhost:${PORT}/health || exit 1
                 docker ps | grep ${COMPOSE_PROJECT_NAME}_$NEXT
                 '''
             }
