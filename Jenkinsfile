@@ -18,8 +18,7 @@ pipeline {
         stage('Deploy Blue on 9001') {
             steps {
                 sh '''
-                echo blue > next_env
-                echo green > current_env
+                echo "Deploying BLUE on port 9001"
 
                 cat <<EOF > .env
 PORT=9001
@@ -35,26 +34,25 @@ RAZORPAY_KEY_SECRET=your_key_secret
 NODE_ENV=production
 EOF
 
+                # Ensure DB is running
                 docker-compose -f docker-compose.yml up -d db
 
-                docker-compose \
-                  -f docker-compose.yml \
-                  -f docker-compose.backend.yml \
-                  -p ${COMPOSE_PROJECT_NAME}_blue \
-                  build backend
+                # FULL cleanup to avoid ContainerConfig error
+                docker-compose -f docker-compose.yml -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_blue down --remove-orphans || true
+                docker image rm ${COMPOSE_PROJECT_NAME}_blue_backend:latest || true
 
-                docker-compose \
-                  -f docker-compose.yml \
-                  -f docker-compose.backend.yml \
-                  -p ${COMPOSE_PROJECT_NAME}_blue \
-                  up -d backend
+                # Build and start BLUE
+                docker-compose -f docker-compose.yml -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_blue build backend
+                docker-compose -f docker-compose.yml -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_blue up -d backend
                 '''
             }
         }
 
-        stage('Stop Old Backend') {
+        stage('Stop Old Backend (9000)') {
             steps {
                 sh '''
+                echo "Stopping old production backend"
+
                 docker rm -f xpress_backend || true
                 docker rm -f ${COMPOSE_PROJECT_NAME}_green_backend || true
                 '''
@@ -64,12 +62,12 @@ EOF
         stage('Re-map Blue to 9000 (Production)') {
             steps {
                 sh '''
-                docker-compose \
-                  -f docker-compose.yml \
-                  -f docker-compose.backend.yml \
-                  -p ${COMPOSE_PROJECT_NAME}_blue \
-                  down
+                echo "Re-mapping BLUE to port 9000"
 
+                # Stop blue on 9001
+                docker-compose -f docker-compose.yml -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_blue down
+
+                # Create production .env
                 cat <<EOF > .env
 PORT=9000
 DB_NAME=lmsmcdb
@@ -84,11 +82,8 @@ RAZORPAY_KEY_SECRET=your_key_secret
 NODE_ENV=production
 EOF
 
-                docker-compose \
-                  -f docker-compose.yml \
-                  -f docker-compose.backend.yml \
-                  -p ${COMPOSE_PROJECT_NAME}_blue \
-                  up -d backend
+                # Start BLUE on 9000
+                docker-compose -f docker-compose.yml -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_blue up -d backend
                 '''
             }
         }
@@ -96,7 +91,7 @@ EOF
 
     post {
         success {
-            echo '✅ Blue deployed and mapped to port 9000 (Zero-downtime)'
+            echo '✅ Blue deployed and running on port 9000 (Production)'
         }
         failure {
             echo '❌ Deployment failed'
