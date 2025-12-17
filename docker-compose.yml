@@ -1,6 +1,9 @@
+version: "3.8"
+
 services:
   backend:
     build: .
+    container_name: backend
     ports:
       - "${PORT}:${PORT}"
     env_file:
@@ -10,16 +13,3 @@ services:
     volumes:
       - .:/usr/src/app
     restart: unless-stopped
-
-  db:
-    image: postgres:15
-    environment:
-      POSTGRES_USER: ${DB_USER}
-      POSTGRES_PASSWORD: ${DB_PASS}
-      POSTGRES_DB: ${DB_NAME}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    restart: unless-stopped
-
-volumes:
-  pgdata:

@@ -9,7 +9,6 @@ pipeline {
     }
 
     stages {
-
         stage('Checkout Code') {
             steps {
                 git branch: "${GIT_BRANCH}", url: "${GIT_REPO}"
@@ -73,7 +72,6 @@ EOF
                 sh '''
                 NEXT=$(cat next_env)
                 sleep 5
-                # optional: check backend health endpoint
                 curl -f http://localhost:${APP_PORT}/health || exit 1
                 docker ps | grep ${COMPOSE_PROJECT_NAME}_$NEXT
                 '''
