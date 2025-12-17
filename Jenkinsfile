@@ -53,7 +53,7 @@ EOF
             steps {
                 sh '''
                 NEXT=$(cat next_env)
-                docker-compose -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT build backend
+                docker-compose -p ${COMPOSE_PROJECT_NAME}_$NEXT build backend
                 '''
             }
         }
@@ -62,7 +62,7 @@ EOF
             steps {
                 sh '''
                 NEXT=$(cat next_env)
-                docker-compose -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT up -d backend
+                docker-compose -p ${COMPOSE_PROJECT_NAME}_$NEXT up -d backend
                 '''
             }
         }
@@ -72,6 +72,7 @@ EOF
                 sh '''
                 NEXT=$(cat next_env)
                 sleep 5
+                # optional: check backend health endpoint
                 curl -f http://localhost:${APP_PORT}/health || exit 1
                 docker ps | grep ${COMPOSE_PROJECT_NAME}_$NEXT
                 '''
@@ -82,7 +83,7 @@ EOF
             steps {
                 sh '''
                 CURRENT=$(cat current_env)
-                docker-compose -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$CURRENT down backend || true
+                docker-compose -p ${COMPOSE_PROJECT_NAME}_$CURRENT down backend || true
                 '''
             }
         }
