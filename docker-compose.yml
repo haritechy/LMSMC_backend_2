@@ -1,7 +1,6 @@
 services:
   backend:
     build: .
-    container_name: express_backend
     ports:
       - "${PORT}:${PORT}"
     env_file:
@@ -14,7 +13,6 @@ services:
 
   db:
     image: postgres:15
-    container_name: postgres_db
     environment:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASS}
@@ -22,7 +20,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "5432:5432" # optional
     restart: unless-stopped
 
 volumes:
