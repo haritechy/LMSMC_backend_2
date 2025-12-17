@@ -4,8 +4,10 @@ services:
   backend:
     build: .
     container_name: backend
-    ports:
-      - "${PORT}:${PORT}"
     env_file:
       - .env
+    ports:
+      - "${PORT}:9000"
+    depends_on:
+      - db
     restart: unless-stopped
