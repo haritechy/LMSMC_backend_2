@@ -26,9 +26,9 @@ DB_PASS=postgres
 DB_HOST=db
 DB_DIALECT=postgres
 DB_PORT=5432
-JWT_SECRET=your_jwt_secret_here
-RAZORPAY_KEY_ID=your_key_id
-RAZORPAY_KEY_SECRET=your_key_secret
+JWT_SECRET=6c1f9f0f7493d9cba76b7d8fc08b4f13227c4c19d2c71486d42a47c6b83c9d937c9a2dba9ea1d74fa85bb39b6e2a3d1beaf331b8589c9d3bc0c5c447e8e08de7
+RAZORPAY_KEY_ID=rzp_test_RB6geQZM7LSjyd
+RAZORPAY_KEY_SECRET=1PwTJ0gYwaCINkHHyC1AocQ5
 NODE_ENV=production
 EOF
                 '''
