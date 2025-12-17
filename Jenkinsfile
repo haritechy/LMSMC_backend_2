@@ -8,6 +8,7 @@ pipeline {
     }
 
     stages {
+
         stage('Checkout Code') {
             steps {
                 git branch: "${GIT_BRANCH}", url: "${GIT_REPO}"
@@ -32,7 +33,8 @@ pipeline {
             steps {
                 sh '''
                 NEXT=$(cat next_env)
-                # Assign port dynamically
+
+                # Assign ports dynamically for blue/green environments
                 if [ "$NEXT" = "blue" ]; then
                     PORT=9001
                 else
@@ -65,7 +67,8 @@ EOF
                 if [ "$(docker ps -a -q -f name=postgres_db)" ]; then
                     docker rm -f postgres_db
                 fi
-                # Start DB
+
+                # Start DB container (persistent volume ensures data is safe)
                 docker-compose -f docker-compose.yml up -d db
                 '''
             }
@@ -75,6 +78,8 @@ EOF
             steps {
                 sh '''
                 NEXT=$(cat next_env)
+
+                # Build backend image
                 docker-compose -f docker-compose.yml -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT build backend
                 '''
             }
@@ -84,6 +89,11 @@ EOF
             steps {
                 sh '''
                 NEXT=$(cat next_env)
+
+                # Remove any existing backend container to avoid ContainerConfig errors
+                docker-compose -f docker-compose.yml -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT rm -fs backend || true
+
+                # Start backend container
                 docker-compose -f docker-compose.yml -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT up -d backend
                 '''
             }
@@ -94,9 +104,14 @@ EOF
                 sh '''
                 NEXT=$(cat next_env)
                 PORT=$(grep ^PORT .env | cut -d '=' -f2)
+
                 sleep 5
                 echo "Checking health on port $PORT"
+
+                # Health check endpoint
                 curl -f http://localhost:${PORT}/health || exit 1
+
+                # List backend container to verify
                 docker ps | grep ${COMPOSE_PROJECT_NAME}_$NEXT
                 '''
             }
@@ -106,6 +121,8 @@ EOF
             steps {
                 sh '''
                 CURRENT=$(cat current_env)
+
+                # Stop old environment backend container
                 docker-compose -f docker-compose.yml -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$CURRENT down backend || true
                 '''
             }
@@ -113,7 +130,11 @@ EOF
     }
 
     post {
-        success { echo '✅ LMS Backend deployed successfully (Zero-downtime)' }
-        failure { echo '❌ Deployment failed — old version still running' }
+        success {
+            echo '✅ LMS Backend deployed successfully (Zero-downtime)'
+        }
+        failure {
+            echo '❌ Deployment failed — old version still running'
+        }
     }
 }
