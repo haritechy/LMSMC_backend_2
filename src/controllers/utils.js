@@ -1,42 +1,65 @@
 const { google } = require("googleapis");
-const path = require("path");
-const fs = require("fs");
 
-// ✅ Load Service Account JSON
-const SERVICE_ACCOUNT_PATH = path.join(__dirname, "../config/service-account.json");
-if (!fs.existsSync(SERVICE_ACCOUNT_PATH)) {
-  console.error("❌ Missing service-account.json file in /config folder");
+/**
+ * Build service account from environment variables
+ */
+const serviceAccount = {
+  type: "service_account",
+  project_id: process.env.GOOGLE_PROJECT_ID,
+  private_key_id: process.env.GOOGLE_PRIVATE_KEY_ID,
+  private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+  client_email: process.env.GOOGLE_CLIENT_EMAIL,
+  client_id: process.env.GOOGLE_CLIENT_ID,
+  auth_uri: process.env.GOOGLE_AUTH_URI,
+  token_uri: process.env.GOOGLE_TOKEN_URI,
+  auth_provider_x509_cert_url: process.env.GOOGLE_CERT_URL,
+  client_x509_cert_url: process.env.GOOGLE_CLIENT_CERT_URL,
+};
+
+if (!serviceAccount.client_email || !serviceAccount.private_key) {
+  console.error("❌ Missing Google service account environment variables");
   process.exit(1);
 }
-const serviceAccount = require(SERVICE_ACCOUNT_PATH);
 
-// ✅ Shared account email (the account under which Meet links are created)
-const SHARED_EMAIL ="lms@techfreak.info";
+const SHARED_EMAIL = process.env.GOOGLE_SHARED_EMAIL || "lms@techfreak.info";
 
-// ✅ Google Calendar auth using service account
+/**
+ * Google JWT Auth
+ */
 const auth = new google.auth.JWT({
   email: serviceAccount.client_email,
-  key: serviceAccount.private_key.replace(/\\n/g, "\n"), // preserve line breaks
+  key: serviceAccount.private_key,
   scopes: ["https://www.googleapis.com/auth/calendar"],
-  subject: SHARED_EMAIL, // impersonate shared account
+  subject: SHARED_EMAIL,
 });
 
 const calendar = google.calendar({ version: "v3", auth });
 
-// ✅ Create Google Meet link
+/**
+ * Create Google Meet
+ */
 async function createGoogleMeet(trainer, student, classData, date, time) {
   try {
     await auth.authorize();
 
     const startTime = new Date(`${date}T${time}`);
-    const endTime = new Date(startTime.getTime() + 60 * 60000); // +1 hour
+    const endTime = new Date(startTime.getTime() + 60 * 60 * 1000); // 1 hour
 
     const event = {
       summary: `${classData.title} - ${student.name}`,
       description: `Training class with ${student.name} by ${trainer.name}`,
-      start: { dateTime: startTime.toISOString(), timeZone: "Asia/Kolkata" },
-      end: { dateTime: endTime.toISOString(), timeZone: "Asia/Kolkata" },
-      attendees: [{ email: trainer.email }, { email: student.email }],
+      start: {
+        dateTime: startTime.toISOString(),
+        timeZone: "Asia/Kolkata",
+      },
+      end: {
+        dateTime: endTime.toISOString(),
+        timeZone: "Asia/Kolkata",
+      },
+      attendees: [
+        { email: trainer.email },
+        { email: student.email },
+      ],
       conferenceData: {
         createRequest: {
           requestId: `meet-${Date.now()}`,
@@ -56,7 +79,7 @@ async function createGoogleMeet(trainer, student, classData, date, time) {
       eventId: response.data.id,
     };
   } catch (err) {
-    console.error("❌ Failed to create Google Meet:", err.message);
+    console.error("❌ Failed to create Google Meet:", err);
     return { meetLink: null, eventId: null };
   }
 }
