@@ -39,7 +39,7 @@ EOF
         stage('Detect Active Environment') {
             steps {
                 sh '''
-                if docker ps --format '{{.Names}}' | grep -q ${COMPOSE_PROJECT_NAME}_blue; then
+                if docker ps --format '{{.Names}}' | grep -q ${COMPOSE_PROJECT_NAME}_blue_backend; then
                     echo blue > current_env
                     echo green > next_env
                 else
@@ -54,7 +54,7 @@ EOF
             steps {
                 sh '''
                 NEXT=$(cat next_env)
-                docker-compose -p ${COMPOSE_PROJECT_NAME}_$NEXT build backend
+                docker-compose -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT build backend
                 '''
             }
         }
@@ -63,7 +63,7 @@ EOF
             steps {
                 sh '''
                 NEXT=$(cat next_env)
-                docker-compose -p ${COMPOSE_PROJECT_NAME}_$NEXT up -d backend
+                docker-compose -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$NEXT up -d backend
                 '''
             }
         }
@@ -72,8 +72,9 @@ EOF
             steps {
                 sh '''
                 NEXT=$(cat next_env)
+                sleep 5
                 # optional: check backend health endpoint
-                sleep 10
+                curl -f http://localhost:${APP_PORT}/health || exit 1
                 docker ps | grep ${COMPOSE_PROJECT_NAME}_$NEXT
                 '''
             }
@@ -83,7 +84,7 @@ EOF
             steps {
                 sh '''
                 CURRENT=$(cat current_env)
-                docker-compose -p ${COMPOSE_PROJECT_NAME}_$CURRENT down backend || true
+                docker-compose -f docker-compose.backend.yml -p ${COMPOSE_PROJECT_NAME}_$CURRENT down backend || true
                 '''
             }
         }
