@@ -2,14 +2,12 @@
 const express = require("express");
 const router = express.Router();
 const controller = require("../controllers/coursesController");
-const upload = require("../middleware/upload");
+const upload = require("../middleware/s3Upload"); // Updated to S3 upload
 const { verifyToken } = require("../middleware/socketAuth");
 
 // ========================= COURSE MANAGEMENT ROUTES =========================
 
-// ✅ Create course (with token verification and file upload)
-
-
+// ✅ Create course (with S3 upload)
 router.post(
   "/creates",
   verifyToken,
@@ -23,113 +21,71 @@ router.post(
   controller.createCourse
 );
 
-// ✅ Get all courses (usually public, no token required)
+// ✅ Get all courses
 router.get("/all", controller.getAllCourses);
 
 // ✅ Get course options/pricing
 router.get("/courseoptions", controller.getCourseOptions);
 
-// ✅ Get single course (usually public, no token required)
+// ✅ Get single course
 router.get("/all/:id", controller.getCourse);
 
-// ✅ Update course (protected)
-router.put("/edit/:id", verifyToken, controller.updateCourse);
+// ✅ Update course (with S3 upload)
+router.put(
+  "/edit/:id",
+  verifyToken,
+  upload.fields([{ name: "courseThumbnail", maxCount: 1 }]),
+  controller.updateCourse
+);
 
-// ✅ Delete course (protected)
+// ✅ Delete course
 router.delete("/delete/:id", verifyToken, controller.deleteCourse);
 
-// ✅ Enroll student (protected)
+// ✅ Enroll student
 router.post("/:id/enroll", verifyToken, controller.enrollStudent);
 
-// ✅ Get active/enrolled courses for logged-in student (protected)
+// ✅ Get active/enrolled courses
 router.get("/active", verifyToken, controller.getActiveCoursesForStudent);
 
-// ✅ Get trainers for student courses
+// ✅ Get trainers for student
 router.get("/:studentid/trainers", verifyToken, controller.getTrainersForStudentCourses);
 
-// ✅ Get students for trainer courses
+// ✅ Get students for trainer
 router.get("/:trainerid/students", verifyToken, controller.getStudentsForTrainer);
-
 
 // ========================= CLASS SCHEDULE ROUTES =========================
 
-// ✅ Get student's enrolled courses and classes (Trainer selects from these to allocate)
+// ✅ Get student's enrolled classes
 router.get(
   "/student/:studentId/enrolled-classes",
   verifyToken,
   controller.getStudentEnrolledClasses
 );
 
-// ✅ Allocate single class to student (Trainer only)
-router.post(
-  "/allocate-class",
-  verifyToken,
-  controller.allocateClassToStudent
-);
+// ✅ Allocate single class
+router.post("/allocate-class", verifyToken, controller.allocateClassToStudent);
 
-// ✅ Bulk allocate multiple classes to student (Trainer only)
-router.post(
-  "/bulk-allocate-classes",
-  verifyToken,
-  controller.bulkAllocateClasses
-);
+// ✅ Bulk allocate classes
+router.post("/bulk-allocate-classes", verifyToken, controller.bulkAllocateClasses);
 
-// ✅ Get schedules for a specific student
-router.get(
-  "/schedules/student/:studentId",
-  verifyToken,
-  controller.getStudentSchedules
-);
+// ✅ Get student schedules
+router.get("/schedules/student/:studentId", verifyToken, controller.getStudentSchedules);
+router.get("/schedules/student", verifyToken, controller.getStudentSchedules);
 
-// ✅ Get schedules for all students (if needed)
-router.get(
-  "/schedules/student",
-  verifyToken,
-  controller.getStudentSchedules
-);
+// ✅ Get trainer schedules
+router.get("/schedules/trainer/:trainerId", verifyToken, controller.getTrainerSchedules);
+router.get("/schedules/trainer", verifyToken, controller.getTrainerSchedules);
 
-// ✅ Get schedules for a specific trainer
-router.get(
-  "/schedules/trainer/:trainerId",
-  verifyToken,
-  controller.getTrainerSchedules
-);
+// ✅ Get single schedule
+router.get("/schedule/:scheduleId", verifyToken, controller.getScheduleById);
 
-// ✅ Get schedules for all trainers (if needed)
-router.get(
-  "/schedules/trainer",
-  verifyToken,
-  controller.getTrainerSchedules
-);
+// ✅ Get trainer reports
+router.get("/reports/trainer/:trainerId", verifyToken, controller.getreports);
 
-// ✅ Get single schedule by ID
-router.get(
-  "/schedule/:scheduleId",
-  verifyToken,
-  controller.getScheduleById
-);
+// ✅ Update schedule
+router.put("/schedule/:scheduleId", verifyToken, controller.updateSchedule);
 
-
-
-router.get(
-  "/reports/trainer/:trainerId",
-  verifyToken,
-  controller.getreports
-);
-
-// ✅ Update schedule (date, time, status, notes)
-router.put(
-  "/schedule/:scheduleId",
-  verifyToken,
-  controller.updateSchedule
-);
-
-router.delete(
-  "/schedule/:scheduleId",
-  verifyToken,
-  controller.deleteSchedule
-);
-
-
+// ✅ Delete schedule
+router.delete("/schedule/:scheduleId", verifyToken, controller.deleteSchedule);
 
 module.exports = router;

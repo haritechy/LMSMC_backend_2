@@ -1,8 +1,7 @@
 const { Op } = require("sequelize");
 const { google } = require("googleapis");
-const path = require("path");
-const fs = require("fs");
 const moment = require("moment");
+const { DeleteObjectCommand, S3Client } = require("@aws-sdk/client-s3");
 
 const User = require("../models/userModel");
 const Class = require("../models/class");
@@ -13,17 +12,41 @@ const CoursePriceOption = require("../models/courseOptionModel");
 const ClassSchedule = require("../models/classSchedule");
 const { createGoogleMeet } = require("./utils");
 
-/* ===============================================================
-   HELPER FUNCTION: Check and Update Enrollment Status
-   🔥 இப்போ remaining classes = 0 ஆனா enrollment complete ஆகும்
-================================================================= */
+// Configure S3 Client for deletions
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
+});
+
+// Helper: Get S3 URL from filename
+const getS3Url = (filename) => {
+  if (!filename) return null;
+  return `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${filename}`;
+};
+
+// Helper: Delete file from S3
+const deleteFromS3 = async (fileKey) => {
+  try {
+    if (!fileKey) return;
+    const command = new DeleteObjectCommand({
+      Bucket: process.env.AWS_S3_BUCKET_NAME,
+      Key: fileKey,
+    });
+    await s3Client.send(command);
+    console.log(`✅ Deleted from S3: ${fileKey}`);
+  } catch (err) {
+    console.error("S3 delete error:", err);
+  }
+};
+
 const checkAndUpdateEnrollmentStatus = async (studentId, courseId, trainerId) => {
   try {
-    // Get the course to know totalClasses limit
     const course = await Course.findByPk(courseId);
     if (!course) return;
 
-    // Count all scheduled classes (not cancelled) - இது allocated sessions
     const scheduledCount = await ClassSchedule.count({
       where: {
         studentId,
@@ -33,7 +56,6 @@ const checkAndUpdateEnrollmentStatus = async (studentId, courseId, trainerId) =>
       }
     });
 
-    // Count completed classes
     const completedCount = await ClassSchedule.count({
       where: {
         studentId,
@@ -43,10 +65,8 @@ const checkAndUpdateEnrollmentStatus = async (studentId, courseId, trainerId) =>
       }
     });
 
-    // 🔥 Calculate remaining classes
     const remainingClasses = Math.max(0, course.totalClasses - scheduledCount);
 
-    // Find the enrollment
     const enrollment = await Enrollment.findOne({
       where: { studentId, courseId, trainerId }
     });
@@ -60,14 +80,12 @@ const checkAndUpdateEnrollmentStatus = async (studentId, courseId, trainerId) =>
         - Remaining: ${remainingClasses}
         `);
 
-    // 🎯 KEY LOGIC: When remaining = 0 AND all scheduled classes are completed
     if (remainingClasses === 0 && completedCount >= course.totalClasses) {
       await enrollment.update({
         status: 'completed',
         completedAt: new Date()
       });
       console.log(`✅ 🎉 Enrollment COMPLETED! Student ${studentId}, Course ${courseId}`);
-      console.log(`   All ${course.totalClasses} classes finished! Remaining = 0`);
       return true;
     }
 
@@ -80,7 +98,7 @@ const checkAndUpdateEnrollmentStatus = async (studentId, courseId, trainerId) =>
 };
 
 /* ===============================================================
-   ALLOCATE SINGLE CLASS (MODIFIED FOR DYNAMIC CLASS CREATION/REUSE)
+   ALLOCATE SINGLE CLASS
 ================================================================= */
 exports.allocateClassToStudent = async (req, res) => {
   try {
@@ -102,23 +120,17 @@ exports.allocateClassToStudent = async (req, res) => {
     const course = await Course.findByPk(courseId);
 
     if (!trainer || !student || !course) {
-      return res.status(404).json({ error: "Invalid data provided (trainer, student, or course not found)" });
+      return res.status(404).json({ error: "Invalid data provided" });
     }
 
-    // 1. Enrollment Check
     const enrollment = await Enrollment.findOne({
       where: { studentId, courseId, trainerId },
     });
     if (!enrollment) {
-      return res.status(403).json({ error: "Student is not enrolled in this course with this trainer." });
+      return res.status(403).json({ error: "Student is not enrolled" });
     }
 
-
-    // 2️⃣ Double Booking Check (for both trainer and student)
-
     const requestedTime = moment(scheduledTime, "HH:mm:ss");
-
-    // Time window: 1 hour before and after
     const oneHourBefore = requestedTime.clone().subtract(1, "hour").format("HH:mm:ss");
     const oneHourAfter = requestedTime.clone().add(1, "hour").format("HH:mm:ss");
 
@@ -128,21 +140,17 @@ exports.allocateClassToStudent = async (req, res) => {
         scheduledTime: {
           [Op.between]: [oneHourBefore, oneHourAfter],
         },
-        [Op.or]: [
-          { trainerId },
-          { studentId },
-        ],
+        [Op.or]: [{ trainerId }, { studentId }],
         status: { [Op.not]: "cancelled" },
       },
     });
 
     if (existingSchedule) {
       return res.status(400).json({
-        error: "❌ Either the trainer or the student already has a class within 1 hour of this time.",
+        error: "❌ Time slot conflict detected",
       });
     }
 
-    // 2. Allocation Limit Check
     const scheduledCount = await ClassSchedule.count({
       where: {
         studentId,
@@ -153,13 +161,12 @@ exports.allocateClassToStudent = async (req, res) => {
 
     if (scheduledCount >= course.totalClasses) {
       return res.status(400).json({
-        error: `❌ Allocation limit reached. Student has ${scheduledCount} of ${course.totalClasses} classes scheduled/completed.`
+        error: `❌ Allocation limit reached (${scheduledCount}/${course.totalClasses})`,
       });
     }
 
     const classOrder = scheduledCount + 1;
 
-    // 3. Dynamic Class Creation/Reuse
     let newClass = await Class.findOne({
       where: { CourseId: courseId, order: classOrder }
     });
@@ -183,7 +190,6 @@ exports.allocateClassToStudent = async (req, res) => {
       });
     }
 
-    // 4. Create Google Meet
     let meetData = null;
     try {
       meetData = await createGoogleMeet(trainer, student, newClass, scheduledDate, scheduledTime);
@@ -191,7 +197,6 @@ exports.allocateClassToStudent = async (req, res) => {
       console.log("⚠️ Meet creation failed:", err.message);
     }
 
-    // 5. Create Schedule
     const schedule = await ClassSchedule.create({
       trainerId,
       studentId,
@@ -206,9 +211,7 @@ exports.allocateClassToStudent = async (req, res) => {
     });
 
     res.status(201).json({
-      message: meetData
-        ? `✅ Class ${newClass.title} (Order ${classOrder}) allocated with Google Meet link`
-        : `Class ${newClass.title} (Order ${classOrder}) allocated successfully (Meet link not generated)`,
+      message: `✅ Class ${newClass.title} (Order ${classOrder}) allocated`,
       schedule,
       newClass,
       meetLink: meetData?.meetLink || null,
@@ -220,7 +223,7 @@ exports.allocateClassToStudent = async (req, res) => {
 };
 
 /* ===============================================================
-   UPDATE SCHEDULE (MODIFIED TO AUTO-COMPLETE ENROLLMENT)
+   UPDATE SCHEDULE
 ================================================================= */
 exports.updateSchedule = async (req, res) => {
   try {
@@ -245,7 +248,6 @@ exports.updateSchedule = async (req, res) => {
       notes: notes !== undefined ? notes : schedule.notes,
     });
 
-    // 🔥 CHECK AND UPDATE ENROLLMENT STATUS IF CLASS IS COMPLETED
     if (status === 'completed') {
       await checkAndUpdateEnrollmentStatus(
         schedule.studentId,
@@ -269,12 +271,12 @@ exports.updateSchedule = async (req, res) => {
     });
   } catch (err) {
     console.error('Update schedule error:', err);
-    res.status(500).json({ error: err.message || "Something went wrong" });
+    res.status(500).json({ error: err.message });
   }
 };
 
 /* ===============================================================
-   BULK ALLOCATE CLASSES (UPDATED)
+   BULK ALLOCATE CLASSES
 ================================================================= */
 exports.bulkAllocateClasses = async (req, res) => {
   try {
@@ -282,7 +284,7 @@ exports.bulkAllocateClasses = async (req, res) => {
 
     if (!Array.isArray(allocations) || allocations.length === 0) {
       return res.status(400).json({
-        error: "Invalid allocations data. Expected non-empty array."
+        error: "Invalid allocations data",
       });
     }
 
@@ -451,7 +453,7 @@ exports.bulkAllocateClasses = async (req, res) => {
 };
 
 /* ===============================================================
-   GET STUDENT'S ENROLLED CLASSES (UPDATED WITH ENROLLMENT STATUS)
+   GET STUDENT'S ENROLLED CLASSES (WITH S3 URLS)
 ================================================================= */
 exports.getStudentEnrolledClasses = async (req, res) => {
   try {
@@ -461,20 +463,18 @@ exports.getStudentEnrolledClasses = async (req, res) => {
     let studentId = null;
     let trainerId = null;
 
-    // ✅ Determine role
     if (user.role === "trainer") {
       trainerId = user.id;
-      studentId = paramStudentId; // Trainer must pass studentId in params
+      studentId = paramStudentId;
       if (!studentId) {
         return res.status(400).json({ error: "Student ID is required for trainers" });
       }
     } else if (user.role === "student") {
-      studentId = user.id; // student uses their own ID
+      studentId = user.id;
     } else {
       return res.status(403).json({ error: "Unauthorized role" });
     }
 
-    // 🧠 Build query
     const where = { studentId };
     if (trainerId) where.trainerId = trainerId;
 
@@ -531,19 +531,13 @@ exports.getStudentEnrolledClasses = async (req, res) => {
         courseData.totalClasses - scheduledCount
       );
 
-      // Enrollment info
       courseData.enrollmentStatus = enrollment.status;
-
       courseData.enrollmentCompletedAt = enrollment.completedAt;
 
-      // 🔑 Calculate Expiry Date (30 days after enrollmentDate)
       const enrollmentDate = enrollment.enrollmentDate || enrollment.createdAt;
       const expiryDate = new Date(enrollmentDate);
       expiryDate.setDate(expiryDate.getDate() + 30);
       courseData.expiryDate = expiryDate;
-
-
-
 
       const courseClasses = allClasses
         .filter((cls) => cls.CourseId === courseData.id)
@@ -552,15 +546,11 @@ exports.getStudentEnrolledClasses = async (req, res) => {
           isScheduled: !!scheduledMap[cls.id],
           isCompleted: scheduledMap[cls.id] === "completed",
           scheduleStatus: scheduledMap[cls.id] || "pending",
+          thumbnailUrl: getS3Url(cls.thumbnail), // S3 URL
         }));
 
       courseData.classes = courseClasses;
-
-      if (courseData.thumbnail) {
-        courseData.thumbnailUrl = `${req.protocol}://${req.get(
-          "host"
-        )}/uploads/${courseData.thumbnail}`;
-      }
+      courseData.thumbnailUrl = getS3Url(courseData.thumbnail); // S3 URL
 
       return courseData;
     });
@@ -571,37 +561,39 @@ exports.getStudentEnrolledClasses = async (req, res) => {
     });
   } catch (err) {
     console.error("Get student enrolled classes error:", err);
-    res.status(500).json({ error: err.message || "Something went wrong" });
+    res.status(500).json({ error: err.message });
   }
 };
 
 /* ===============================================================
-   CREATE COURSE 
+   CREATE COURSE (WITH S3 SUPPORT)
 ================================================================= */
 exports.createCourse = async (req, res) => {
   try {
-    const { title, description, totalClasses ,rating} = req.body;
+    const { title, description, totalClasses, rating } = req.body;
     const rawOptions = req.body.options;
-    const courseThumbnail = req.files?.courseThumbnail?.[0]?.filename;
+    
+    // S3 automatically stores file with key, accessible via req.files
+    const courseThumbnail = req.files?.courseThumbnail?.[0]?.key; // S3 key path
 
     if (!title || !totalClasses) {
-      return res.status(400).json({ error: "Title and totalClasses are required." });
+      return res.status(400).json({ error: "Title and totalClasses are required" });
     }
 
     const ratingValue = parseFloat(rating) || 0;
-if (ratingValue < 0 || ratingValue > 5) {
-  return res.status(400).json({ error: "Rating must be between 0 and 5." });
-}
+    if (ratingValue < 0 || ratingValue > 5) {
+      return res.status(400).json({ error: "Rating must be between 0 and 5" });
+    }
 
     const finalTotalClasses = parseInt(totalClasses) || 0;
     if (finalTotalClasses <= 0) {
-      return res.status(400).json({ error: "totalClasses must be a number greater than 0." });
+      return res.status(400).json({ error: "totalClasses must be greater than 0" });
     }
 
     const course = await Course.create({
       title,
       description,
-      thumbnail: courseThumbnail || null,
+      thumbnail: courseThumbnail || null, // Store S3 key
       duration: 0,
       totalClasses: finalTotalClasses,
       rating: ratingValue,
@@ -625,9 +617,12 @@ if (ratingValue < 0 || ratingValue > 5) {
       ],
     });
 
+    const courseData = completeCourse.toJSON();
+    courseData.thumbnailUrl = getS3Url(courseData.thumbnail); // Add S3 URL
+
     res.status(201).json({
-      course: completeCourse,
-      message: `✅ Course created successfully with a limit of ${finalTotalClasses} classes.`,
+      course: courseData,
+      message: `✅ Course created successfully with ${finalTotalClasses} classes`,
     });
   } catch (err) {
     console.error("Create course error:", err);
@@ -636,7 +631,7 @@ if (ratingValue < 0 || ratingValue > 5) {
 };
 
 /* ===============================================================
-   GET ALL COURSES
+   GET ALL COURSES (WITH S3 URLS)
 ================================================================= */
 exports.getAllCourses = async (req, res) => {
   try {
@@ -651,7 +646,7 @@ exports.getAllCourses = async (req, res) => {
 
     const coursesWithUrls = courses.map(course => {
       const courseData = course.toJSON();
-      if (courseData.thumbnail) courseData.thumbnailUrl = `${req.protocol}://${req.get('host')}/uploads/${courseData.thumbnail}`;
+      courseData.thumbnailUrl = getS3Url(courseData.thumbnail);
       return courseData;
     });
 
@@ -663,7 +658,7 @@ exports.getAllCourses = async (req, res) => {
 };
 
 /* ===============================================================
-   GET SINGLE COURSE
+   GET SINGLE COURSE (WITH S3 URLS)
 ================================================================= */
 exports.getCourse = async (req, res) => {
   try {
@@ -679,11 +674,11 @@ exports.getCourse = async (req, res) => {
     if (!course) return res.status(404).json({ error: "Course not found" });
 
     const courseData = course.toJSON();
-    if (courseData.thumbnail) courseData.thumbnailUrl = `${req.protocol}://${req.get('host')}/uploads/${courseData.thumbnail}`;
+    courseData.thumbnailUrl = getS3Url(courseData.thumbnail);
 
     if (courseData.classes) {
       courseData.classes = courseData.classes.map(cls => {
-        if (cls.thumbnail) cls.thumbnailUrl = `${req.protocol}://${req.get('host')}/uploads/${cls.thumbnail}`;
+        cls.thumbnailUrl = getS3Url(cls.thumbnail);
         return cls;
       });
     }
@@ -696,7 +691,7 @@ exports.getCourse = async (req, res) => {
 };
 
 /* ===============================================================
-   UPDATE COURSE 
+   UPDATE COURSE (WITH S3 SUPPORT)
 ================================================================= */
 exports.updateCourse = async (req, res) => {
   try {
@@ -713,15 +708,24 @@ exports.updateCourse = async (req, res) => {
       title: req.body.title,
       description: req.body.description,
       TrainerId: req.body.trainerId ?? course.TrainerId,
-      rating:  parseFloat(req.body.rating) || 0,
+      rating: parseFloat(req.body.rating) || 0,
     };
+
+    // Handle new thumbnail upload
+    if (req.files?.courseThumbnail?.[0]?.key) {
+      // Delete old thumbnail from S3
+      if (course.thumbnail) {
+        await deleteFromS3(course.thumbnail);
+      }
+      updatePayload.thumbnail = req.files.courseThumbnail[0].key;
+    }
 
     if (req.body.totalClasses !== undefined) {
       const newTotalClasses = parseInt(req.body.totalClasses);
       if (newTotalClasses > 0) {
         updatePayload.totalClasses = newTotalClasses;
       } else {
-        return res.status(400).json({ error: "totalClasses must be a number greater than 0." });
+        return res.status(400).json({ error: "totalClasses must be greater than 0" });
       }
     }
 
@@ -747,7 +751,10 @@ exports.updateCourse = async (req, res) => {
       ]
     });
 
-    res.json({ course: updatedCourse, message: "✅ Course updated successfully" });
+    const courseData = updatedCourse.toJSON();
+    courseData.thumbnailUrl = getS3Url(courseData.thumbnail);
+
+    res.json({ course: courseData, message: "✅ Course updated successfully" });
   } catch (err) {
     console.error('Update course error:', err);
     res.status(500).json({ error: err.message });
@@ -755,12 +762,29 @@ exports.updateCourse = async (req, res) => {
 };
 
 /* ===============================================================
-   DELETE COURSE
+   DELETE COURSE (WITH S3 CLEANUP)
 ================================================================= */
 exports.deleteCourse = async (req, res) => {
   try {
-    const course = await Course.findByPk(req.params.id);
+    const course = await Course.findByPk(req.params.id, {
+      include: [{ model: Class, as: "classes" }]
+    });
+    
     if (!course) return res.status(404).json({ error: "Course not found" });
+
+    // Delete course thumbnail from S3
+    if (course.thumbnail) {
+      await deleteFromS3(course.thumbnail);
+    }
+
+    // Delete all class thumbnails from S3
+    if (course.classes) {
+      for (const cls of course.classes) {
+        if (cls.thumbnail) {
+          await deleteFromS3(cls.thumbnail);
+        }
+      }
+    }
 
     await course.destroy();
     res.json({ message: "✅ Course deleted successfully" });
@@ -779,7 +803,7 @@ exports.enrollStudent = async (req, res) => {
     const courseId = req.params.id;
 
     if (!studentName || !studentId || !trainerId)
-      return res.status(400).json({ error: "Student name, Student ID, and Trainer ID are required" });
+      return res.status(400).json({ error: "Student name, Student ID, and Trainer ID required" });
 
     const course = await Course.findByPk(courseId);
     const trainer = await User.findByPk(trainerId);
@@ -791,7 +815,7 @@ exports.enrollStudent = async (req, res) => {
       where: { studentId, courseId, trainerId }
     });
 
-    if (existingEnrollment) return res.status(400).json({ error: "Student is already enrolled" });
+    if (existingEnrollment) return res.status(400).json({ error: "Already enrolled" });
 
     const enrollment = await Enrollment.create({
       studentName: studentName.trim(),
@@ -809,12 +833,12 @@ exports.enrollStudent = async (req, res) => {
 };
 
 /* ===============================================================
-   GET ACTIVE COURSES FOR STUDENT
+   GET ACTIVE COURSES FOR STUDENT (WITH S3 URLS)
 ================================================================= */
 exports.getActiveCoursesForStudent = async (req, res) => {
   try {
     const studentId = req.user?.id || req.body.studentId;
-    if (!studentId) return res.status(400).json({ error: "Student ID is required" });
+    if (!studentId) return res.status(400).json({ error: "Student ID required" });
 
     const enrolledCourses = await Course.findAll({
       include: [
@@ -837,29 +861,27 @@ exports.getActiveCoursesForStudent = async (req, res) => {
       courseData.completedCount = courseSchedules.filter(s => s.status === 'completed').length;
       courseData.remainingClasses = Math.max(0, courseData.totalClasses - courseData.scheduledCount);
 
-      // 🔥 ADD ENROLLMENT STATUS
       const enrollment = courseData.courseEnrollments?.[0];
       courseData.enrollmentStatus = enrollment?.status || 'active';
       courseData.enrollmentCompletedAt = enrollment?.completedAt;
 
-      if (courseData.thumbnail) courseData.thumbnailUrl = `${req.protocol}://${req.get('host')}/uploads/${courseData.thumbnail}`;
+      courseData.thumbnailUrl = getS3Url(courseData.thumbnail);
       return courseData;
     });
 
     res.json(coursesWithUrls);
   } catch (err) {
-    console.error('Get active courses for student error:', err);
+    console.error('Get active courses error:', err);
     res.status(500).json({ error: err.message });
   }
 };
 
-/* ===============================================================
-   REMAINING FUNCTIONS (UNCHANGED)
-================================================================= */
+// Add these remaining functions to your coursesController.js
+
 exports.getTrainersForStudentCourses = async (req, res) => {
   try {
     const studentId = req.user?.id || req.query.studentId || req.body.studentId;
-    if (!studentId) return res.status(400).json({ error: "Student ID is required" });
+    if (!studentId) return res.status(400).json({ error: "Student ID required" });
 
     const enrollments = await Enrollment.findAll({
       where: { studentId },
@@ -909,7 +931,7 @@ exports.getTrainersForStudentCourses = async (req, res) => {
 exports.getStudentsForTrainer = async (req, res) => {
   try {
     const trainerId = req.user?.id || req.query.trainerId || req.body.trainerId;
-    if (!trainerId) return res.status(400).json({ error: "Trainer ID is required" });
+    if (!trainerId) return res.status(400).json({ error: "Trainer ID required" });
 
     const enrollments = await Enrollment.findAll({
       where: { trainerId },
@@ -961,14 +983,15 @@ exports.getStudentsForTrainer = async (req, res) => {
 
       const classesWithStatus = course.classes.map(cls => ({
         ...cls,
-        scheduleStatus: classMap[cls.id] || 'pending'
+        scheduleStatus: classMap[cls.id] || 'pending',
+        thumbnailUrl: getS3Url(cls.thumbnail) // Add S3 URL
       }));
 
       const courseData = {
         id: course.id,
         title: course.title,
         thumbnail: course.thumbnail,
-        thumbnailUrl: course.thumbnail ? `${req.protocol}://${req.get('host')}/uploads/${course.thumbnail}` : null,
+        thumbnailUrl: getS3Url(course.thumbnail), // Add S3 URL
         totalClasses: course.totalClasses,
         scheduledCount,
         completedCount,
@@ -1033,8 +1056,8 @@ exports.getCourseOptions = async (req, res) => {
     const options = await CoursePriceOption.findAll();
     res.status(200).json(options);
   } catch (err) {
-    console.error("Error fetching course options:", err);
-    res.status(500).json({ message: "Failed to fetch course options" });
+    console.error("Error fetching options:", err);
+    res.status(500).json({ message: "Failed to fetch options" });
   }
 };
 
@@ -1043,7 +1066,7 @@ exports.getStudentSchedules = async (req, res) => {
     const studentId = req.user?.id || req.params.studentId || req.query.studentId;
 
     if (!studentId) {
-      return res.status(400).json({ error: "Student ID is required" });
+      return res.status(400).json({ error: "Student ID required" });
     }
 
     const schedules = await ClassSchedule.findAll({
@@ -1059,10 +1082,10 @@ exports.getStudentSchedules = async (req, res) => {
     const schedulesWithUrls = schedules.map(schedule => {
       const scheduleData = schedule.toJSON();
       if (scheduleData.course?.thumbnail) {
-        scheduleData.course.thumbnailUrl = `${req.protocol}://${req.get('host')}/uploads/${scheduleData.course.thumbnail}`;
+        scheduleData.course.thumbnailUrl = getS3Url(scheduleData.course.thumbnail);
       }
       if (scheduleData.class?.thumbnail) {
-        scheduleData.class.thumbnailUrl = `${req.protocol}://${req.get('host')}/uploads/${scheduleData.class.thumbnail}`;
+        scheduleData.class.thumbnailUrl = getS3Url(scheduleData.class.thumbnail);
       }
       return scheduleData;
     });
@@ -1074,20 +1097,17 @@ exports.getStudentSchedules = async (req, res) => {
   }
 };
 
-
 exports.getreports = async (req, res) => {
   try {
     const trainerId = req.user?.id || req.params.trainerId || req.query.trainerId;
 
     if (!trainerId) {
-      return res.status(400).json({ error: "Trainer ID is required" });
+      return res.status(400).json({ error: "Trainer ID required" });
     }
 
-    // Define last month's date range
     const startOfLastMonth = moment().subtract(0, "months").startOf("month").toDate();
     const endOfLastMonth = moment().subtract(0, "months").endOf("month").toDate();
 
-    // Fetch all schedules for that trainer last month
     const schedules = await ClassSchedule.findAll({
       where: {
         trainerId,
@@ -1102,7 +1122,6 @@ exports.getreports = async (req, res) => {
       ],
     });
 
-    // Calculate stats
     const completedClasses = schedules.filter(s => s.status === "completed").length;
     const cancelledClasses = schedules.filter(s => s.status === "cancelled").length;
 
@@ -1117,7 +1136,6 @@ exports.getreports = async (req, res) => {
     const uniqueStudentIds = new Set(enrollments.map(e => e.studentId));
     const totalStudentsHandled = uniqueStudentIds.size;
 
-    // (Optional) Return sample recent classes (for dashboard preview)
     const recentClasses = schedules
       .filter(s => s.status === "completed")
       .sort((a, b) => new Date(b.scheduledDate) - new Date(a.scheduledDate))
@@ -1153,7 +1171,7 @@ exports.getTrainerSchedules = async (req, res) => {
     const trainerId = req.user?.id || req.params.trainerId || req.query.trainerId;
 
     if (!trainerId) {
-      return res.status(400).json({ error: "Trainer ID is required" });
+      return res.status(400).json({ error: "Trainer ID required" });
     }
 
     const schedules = await ClassSchedule.findAll({
@@ -1169,10 +1187,10 @@ exports.getTrainerSchedules = async (req, res) => {
     const schedulesWithUrls = schedules.map(schedule => {
       const scheduleData = schedule.toJSON();
       if (scheduleData.course?.thumbnail) {
-        scheduleData.course.thumbnailUrl = `${req.protocol}://${req.get('host')}/uploads/${scheduleData.course.thumbnail}`;
+        scheduleData.course.thumbnailUrl = getS3Url(scheduleData.course.thumbnail);
       }
       if (scheduleData.class?.thumbnail) {
-        scheduleData.class.thumbnailUrl = `${req.protocol}://${req.get('host')}/uploads/${scheduleData.class.thumbnail}`;
+        scheduleData.class.thumbnailUrl = getS3Url(scheduleData.class.thumbnail);
       }
       return scheduleData;
     });
@@ -1196,7 +1214,7 @@ exports.deleteSchedule = async (req, res) => {
     }
 
     if (schedule.trainerId !== userId) {
-      return res.status(403).json({ error: "Only trainer can delete schedule" });
+      return res.status(403).json({ error: "Only trainer can delete" });
     }
 
     await schedule.destroy();
@@ -1232,10 +1250,10 @@ exports.getScheduleById = async (req, res) => {
 
     const scheduleData = schedule.toJSON();
     if (scheduleData.course?.thumbnail) {
-      scheduleData.course.thumbnailUrl = `${req.protocol}://${req.get('host')}/uploads/${scheduleData.course.thumbnail}`;
+      scheduleData.course.thumbnailUrl = getS3Url(scheduleData.course.thumbnail);
     }
     if (scheduleData.class?.thumbnail) {
-      scheduleData.class.thumbnailUrl = `${req.protocol}://${req.get('host')}/uploads/${scheduleData.class.thumbnail}`;
+      scheduleData.class.thumbnailUrl = getS3Url(scheduleData.class.thumbnail);
     }
 
     res.json({ schedule: scheduleData });
@@ -1244,5 +1262,3 @@ exports.getScheduleById = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
-
-module.exports = exports;

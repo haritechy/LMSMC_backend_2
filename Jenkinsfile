@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         COMPOSE_PROJECT_NAME = "lms_backend"
-        GIT_REPO = "https://github.com/haritechy/LMSMC_backend_2.git"
+        GIT_REPO   = "https://github.com/haritechy/LMSMC_backend_2.git"
         GIT_BRANCH = "lmsproduction"
     }
 
@@ -23,32 +23,33 @@ pipeline {
 PORT=9000
 NODE_ENV=production
 
-# Database
-DB_NAME=lmsmcdb
-DB_USER=postgres
-DB_PASS=postgres
-DB_HOST=db
-DB_DIALECT=postgres
-DB_PORT=5432
+DB_NAME=${DB_NAME}
+DB_USER=${DB_USER}
+DB_PASS=${DB_PASS}
+DB_HOST=${DB_HOST}
+DB_DIALECT=${DB_DIALECT}
+DB_PORT=${DB_PORT}
 
-# Auth
-JWT_SECRET=6c1f9f0f7493d9cba76b7d8fc08b4f13227c4c19d2c71486d42a47c6b83c9d937c9a2dba9ea1d74fa85bb39b6e2a3d1beaf331b8589c9d3bc0c5c447e8e08de7
+JWT_SECRET=${JWT_SECRET}
 
-# Razorpay
-RAZORPAY_KEY_ID=rzp_test_RB6geQZM7LSjyd
-RAZORPAY_KEY_SECRET=1PwTJ0gYwaCINkHHyC1AocQ5
+RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID}
+RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET}
 
-# Google Service Account (Calendar / Meet)
-GOOGLE_PROJECT_ID=lmsmusical
-GOOGLE_PRIVATE_KEY_ID=xxxx
-GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\\nXXXX\\n-----END PRIVATE KEY-----\\n"
-GOOGLE_CLIENT_EMAIL=lms-539@lmsmusical.iam.gserviceaccount.com
-GOOGLE_CLIENT_ID=xxxx
-GOOGLE_AUTH_URI=https://accounts.google.com/o/oauth2/auth
-GOOGLE_TOKEN_URI=https://oauth2.googleapis.com/token
-GOOGLE_CERT_URL=https://www.googleapis.com/oauth2/v1/certs
-GOOGLE_CLIENT_CERT_URL=https://www.googleapis.com/robot/v1/metadata/x509/lms-539%40lmsmusical.iam.gserviceaccount.com
-GOOGLE_SHARED_EMAIL=lms@techfreak.info
+GOOGLE_PROJECT_ID=${GOOGLE_PROJECT_ID}
+GOOGLE_PRIVATE_KEY_ID=${GOOGLE_PRIVATE_KEY_ID}
+GOOGLE_PRIVATE_KEY="${GOOGLE_PRIVATE_KEY}"
+GOOGLE_CLIENT_EMAIL=${GOOGLE_CLIENT_EMAIL}
+GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+GOOGLE_AUTH_URI=${GOOGLE_AUTH_URI}
+GOOGLE_TOKEN_URI=${GOOGLE_TOKEN_URI}
+GOOGLE_CERT_URL=${GOOGLE_CERT_URL}
+GOOGLE_CLIENT_CERT_URL=${GOOGLE_CLIENT_CERT_URL}
+GOOGLE_SHARED_EMAIL=${GOOGLE_SHARED_EMAIL}
+
+AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+AWS_REGION=${AWS_REGION}
+AWS_S3_BUCKET_NAME=${AWS_S3_BUCKET_NAME}
 EOF
                 '''
             }
@@ -56,9 +57,7 @@ EOF
 
         stage('Start DB') {
             steps {
-                sh '''
-                docker-compose -f docker-compose.yml up -d db
-                '''
+                sh 'docker-compose -f docker-compose.yml up -d db'
             }
         }
 
@@ -75,9 +74,10 @@ EOF
 
     post {
         success {
-            echo '✅ Backend successfully deployed on port 9000'
+            echo '✅ Backend deployed'
         }
         failure {
+            echo '❌ Backend deployment failed'
             echo '❌ Backend deployment failed'
         }
     }
